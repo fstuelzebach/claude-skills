@@ -3,6 +3,12 @@
 > There's a difference between *using* Claude Code and *working with* Claude Code.
 > This repo is my answer to what the latter looks like.
 
+Derived from [Matt Pocock's skills repo](https://github.com/mattpocock/skills) — he built the pattern, I adapted it for my own purposes. Matt's original is focused on engineering fundamentals: TDD, code review, spec writing, architecture. This fork is built around a different goal: **staying in command while delegating aggressively.**
+
+That means two things in practice. Macro-level control: roadmaps, session continuity, a Notion second brain that means I always know where things stand and can pick up exactly where I left off. Micro-level excellence: precise skills that Claude can execute reliably without me having to re-explain how I work every time. The point isn't to vibe code and hope for the best. It's to build a working method that compounds — one where AI handles the execution and I handle the direction.
+
+I'm not a developer. I'm a curious person who reads widely, thinks carefully, and uses these tools to build things that would otherwise take much longer or stay half-formed. This repo is how I keep that from drifting into chaos.
+
 ---
 
 ## What this is
