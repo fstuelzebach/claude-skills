@@ -9,7 +9,7 @@ You are implementing the /view skill.
 
 1. Identify the most recent assistant message in this conversation — the one immediately before the user typed `/view`.
 2. Write its full content verbatim (no reformatting, no added commentary) to `/tmp/claude_view_YYYYMMDD_HHMMSS.md` using the actual current timestamp.
-3. Run `open -a "PyCharm" /tmp/claude_view_<timestamp>.md` via Bash to open it as a new PyCharm editor tab.
+3. Run `open -a "PyCharm CE" /tmp/claude_view_<timestamp>.md` via Bash to open it as a new PyCharm editor tab.
 4. Tell the user: `Opened in PyCharm: /tmp/claude_view_<filename>` and remind them they can run `/view clean` to delete all view files when done.
 
 **Cleanup (`/view clean`):**
