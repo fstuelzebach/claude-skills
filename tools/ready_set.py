@@ -199,6 +199,8 @@ def compute(docs_root: Path) -> dict:
         'blocked': blocked,
         'rollup': rollup,
         'redundancies': redundancies,
+        # Done gids (all sub-projects) — lets notion_sync tick checkboxes without guessing.
+        'done': sorted(done),
         'counts': {'ready': len(ready), 'blocked': len(blocked),
                    'sub_projects': len(projects), 'tasks': len(all_tasks)},
     }
@@ -226,17 +228,85 @@ def print_summary(d: dict) -> None:
     print()
 
 
+# A line that is clearly *trying* to be a task (checkbox + bold id, or dependency
+# tags) but does not parse — the parser would silently skip it.
+LOOSE_TASK_RE = re.compile(r'^\s*[-*+]\s*\[[^\]]*\].*(\*\*[A-Za-z0-9_.\-]+\*\*|`(needs|blocks):)')
+
+
+def validate(docs_root: Path) -> list[str]:
+    """Structural errors that would silently corrupt the frontier. Empty = OK."""
+    errors: list[str] = []
+    projects = []
+    for path in sorted(docs_root.glob('**/ROADMAP.md')):
+        try:
+            text = path.read_text(encoding='utf-8')
+        except UnicodeDecodeError as e:
+            errors.append(f"{path}: not valid UTF-8 ({e})")
+            continue
+        _, body = parse_front_matter(text)
+        offset = text[:len(text) - len(body)].count('\n')
+        for i, line in enumerate(body.splitlines(), start=1 + offset):
+            if LOOSE_TASK_RE.match(line) and not TASK_RE.match(line):
+                errors.append(f"{path}:{i}: malformed task line: {line.strip()[:80]}")
+        projects.append((path, parse_roadmap(path, docs_root)))
+
+    tasks: dict[str, tuple[Path, dict]] = {}
+    for path, proj in projects:
+        for t in proj['tasks']:
+            if t['gid'] in tasks:
+                errors.append(f"{path}: duplicate task id {t['gid']} "
+                              f"(also in {tasks[t['gid']][0]})")
+            else:
+                tasks[t['gid']] = (path, t)
+
+    # Dangling refs only matter on open tasks (done tasks skip readiness).
+    for gid, (path, t) in tasks.items():
+        if t['done']:
+            continue
+        for ref in t['needs']:
+            if ref not in tasks:
+                errors.append(f"{path}: {gid} needs unknown task {ref}")
+
+    # Cycles among open tasks would block each other forever.
+    open_needs = {g: [n for n in t['needs'] if n in tasks and not tasks[n][1]['done']]
+                  for g, (_, t) in tasks.items() if not t['done']}
+    state: dict[str, int] = {}
+
+    def visit(g: str, stack: list[str]) -> None:
+        state[g] = 1
+        for n in open_needs.get(g, []):
+            if state.get(n) == 1:
+                errors.append("dependency cycle: " + " -> ".join(stack[stack.index(n):] + [n]))
+            elif n not in state:
+                visit(n, stack + [n])
+        state[g] = 2
+
+    for g in open_needs:
+        if g not in state:
+            visit(g, [g])
+    return errors
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Compute the ready frontier from ROADMAP.md files.")
     ap.add_argument('--root', default='docs', help="docs root to scan (default: docs)")
     ap.add_argument('--json', action='store_true', help="print full JSON to stdout")
     ap.add_argument('--out', default='docs/ready_set.json', help="where to write the JSON")
+    ap.add_argument('--check', action='store_true',
+                    help="validate ROADMAP structure only; write nothing; exit 1 on errors")
     args = ap.parse_args()
 
     docs_root = Path(args.root)
     if not docs_root.exists():
         print(f"error: docs root '{docs_root}' not found (run from repo root)", file=sys.stderr)
         return 1
+
+    if args.check:
+        errors = validate(docs_root)
+        for e in errors:
+            print(f"error: {e}", file=sys.stderr)
+        print(f"ROADMAP check: {len(errors)} error(s)")
+        return 1 if errors else 0
 
     data = compute(docs_root)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
