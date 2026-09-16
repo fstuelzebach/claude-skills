@@ -1,28 +1,35 @@
 #!/usr/bin/env python3
 """
-notion_sync.py  ·  One-way projection of the ready frontier into Notion.
+notion_sync.py  ·  One-way, create-only projection of open tasks into Notion.
 
 WHAT IT DOES
-    Reads docs/ready_set.json and reconciles the ready frontier into a Notion
-    database (your "Progress Tasks" DB):
-      · creates a Notion page for each ready task not already there,
-      · archives Notion pages whose task left the frontier (done or newly blocked).
-    It NEVER reads task status back from Notion. ROADMAPs are the only truth.
-    (Completion of your own tasks comes back via the checkbox-relay in the
-    session-close ritual, not from this script.)
+    Reads docs/ready_set.json and projects open tasks into a Notion Tasks DB
+    (used by the `push-todos` skill):
+      · creates a page for each open task that has no page yet
+        (default: the ready frontier; --all: every unchecked task, incl. blocked),
+      · ticks the checkbox on pages whose task is now [x] in a ROADMAP.
+    It NEVER archives or deletes pages and never touches Datum — scheduling is done
+    by hand in Notion, and a page must not vanish because its task became blocked.
+    It never writes to ROADMAPs. The checkbox flows back only as a *signal*:
+    `--checked` lists pages ticked in Notion whose task is still open, and the
+    session-close ritual flips those ROADMAP lines by hand. ROADMAPs stay the truth.
 
 SETUP
     pip install requests
-    export NOTION_TOKEN="secret_xxx"              # internal integration token (global)
-    export NOTION_TASKS_DB_ID="<database id>"     # 32-char id of Progress Tasks DB (global)
-    export NOTION_CLASS_PAGE_ID="<page id>"       # per-project class page — also in .claude/project.env
+    NOTION_TOKEN          internal integration token (global env var)
+    NOTION_TASKS_DB_ID    32-char id of the Tasks DB (global env var)
+    NOTION_CLASS_PAGE_ID  per-project class page — in .claude/project.env
+    .claude/project.env is read automatically (KEY=VALUE lines) for any variable
+    not already set, so no `source` is needed (works on Windows too).
     The integration must be shared with the DB: open the DB in Notion ->
     ··· menu -> Connections -> add your integration.
 
 USAGE
-    python tools/notion_sync.py --inspect     # print the DB schema (also a connection test)
-    python tools/notion_sync.py --dry-run      # show what would change, change nothing
-    python tools/notion_sync.py                # reconcile for real
+    python tools/notion_sync.py --inspect          # print DB schema (connection test)
+    python tools/notion_sync.py --dry-run          # show what would change
+    python tools/notion_sync.py                    # push the ready frontier
+    python tools/notion_sync.py --all [--dry-run]  # push every unchecked task
+    python tools/notion_sync.py --checked          # list open tasks ticked in Notion
 
 CONFIGURE the PROPERTY_MAP below to match your DB's exact property names.
 Run --inspect first to see them.
@@ -36,43 +43,56 @@ try:
 except ImportError:
     sys.exit("requests not installed -> pip install requests")
 
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 API = "https://api.notion.com/v1"
 VERSION = "2022-06-28"
+TITLE_MAX = 120      # page titles are truncated; the full title goes into Notes
+RICH_TEXT_MAX = 2000  # Notion's per-text-object limit
 
 # --- Map your Notion DB property names here (see --inspect output) -------------
+# Set a value to "" to skip that property.
 PROPERTY_MAP = {
-    "title":       "title",       # the title property
-    "task_key":    "task_key",    # rich_text: stores the global task id (gid) for matching
-    "sub_project": "",            # relation in this DB — skipped (can't write page IDs)
-    "status":      "",             # select with no options configured — skipped
-    "blocks":      "blocks",      # rich_text (optional; set to "" to skip)
-    "class":       "Class",       # relation → olymp_capital class page (makes tasks visible on project page)
+    "title":    "title",             # title property
+    "task_key": "task_key",          # rich_text: global task id (gid) used for matching
+    "blocks":   "blocks",            # rich_text: ids this task unlocks
+    "notes":    "Notes",             # rich_text: full title + needs/waiting_on
+    "class":    "Class",             # relation → project class page
+    "done":     "Kontrollkästchen",  # checkbox: ticked when the task is [x]
 }
-READY_STATUS_VALUE = "Ready"      # the Status value projected tasks get
 # ------------------------------------------------------------------------------
 
 
+def load_project_env(path: Path = Path(".claude/project.env")) -> None:
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.removeprefix("export ").partition("=")
+        os.environ.setdefault(key.strip(), val.strip().strip('"').strip("'"))
+
+
+def env(name: str, hint: str = "") -> str:
+    v = os.environ.get(name)
+    if not v:
+        sys.exit(f"{name} not set{(' — ' + hint) if hint else ''}")
+    return v
+
+
 def headers() -> dict:
-    token = os.environ.get("NOTION_TOKEN")
-    if not token:
-        sys.exit("NOTION_TOKEN not set")
-    return {"Authorization": f"Bearer {token}",
+    return {"Authorization": f"Bearer {env('NOTION_TOKEN')}",
             "Notion-Version": VERSION,
             "Content-Type": "application/json"}
 
 
 def db_id() -> str:
-    v = os.environ.get("NOTION_TASKS_DB_ID")
-    if not v:
-        sys.exit("NOTION_TASKS_DB_ID not set")
-    return v
+    return env("NOTION_TASKS_DB_ID")
 
 
 def class_id() -> str:
-    v = os.environ.get("NOTION_CLASS_PAGE_ID")
-    if not v:
-        sys.exit("NOTION_CLASS_PAGE_ID not set — add to .claude/project.env")
-    return v
+    return env("NOTION_CLASS_PAGE_ID", "add to .claude/project.env")
 
 
 def inspect() -> None:
@@ -86,11 +106,11 @@ def inspect() -> None:
     print("\nSet PROPERTY_MAP at the top of this file to match these names.")
 
 
-def query_existing() -> dict[str, str]:
-    """Return {task_key: page_id} for non-archived pages, paginating fully."""
-    out: dict[str, str] = {}
+def query_existing() -> dict[str, dict]:
+    """Return {task_key: {"id", "checked"}} for non-archived pages, paginating fully."""
+    out: dict[str, dict] = {}
     payload: dict = {"page_size": 100}
-    key_prop = PROPERTY_MAP["task_key"]
+    key_prop, done_prop = PROPERTY_MAP["task_key"], PROPERTY_MAP.get("done")
     while True:
         r = requests.post(f"{API}/databases/{db_id()}/query",
                           headers=headers(), json=payload, timeout=30)
@@ -98,58 +118,93 @@ def query_existing() -> dict[str, str]:
             sys.exit(f"query failed [{r.status_code}]: {r.text[:300]}")
         data = r.json()
         for page in data["results"]:
-            rt = page["properties"].get(key_prop, {}).get("rich_text", [])
+            props = page["properties"]
+            rt = props.get(key_prop, {}).get("rich_text", [])
             key = rt[0]["plain_text"] if rt else None
             if key:
-                out[key] = page["id"]
+                checked = bool(props.get(done_prop, {}).get("checkbox")) if done_prop else False
+                out[key] = {"id": page["id"], "checked": checked}
         if not data.get("has_more"):
             return out
         payload["start_cursor"] = data["next_cursor"]
 
 
+def _text(s: str, limit: int = RICH_TEXT_MAX) -> list[dict]:
+    return [{"text": {"content": s[:limit]}}]
+
+
+def page_title(task: dict) -> str:
+    title = task["title"] or ""
+    if len(title) > TITLE_MAX:
+        title = title[:TITLE_MAX - 1].rstrip() + "…"
+    return f"{task['gid']} — {title}" if title else task["gid"]
+
+
 def task_properties(task: dict) -> dict:
     p = {
-        PROPERTY_MAP["title"]: {"title": [{"text": {"content": task["title"] or task["gid"]}}]},
-        PROPERTY_MAP["task_key"]: {"rich_text": [{"text": {"content": task["gid"]}}]},
+        PROPERTY_MAP["title"]: {"title": _text(page_title(task))},
+        PROPERTY_MAP["task_key"]: {"rich_text": _text(task["gid"])},
     }
-    if PROPERTY_MAP.get("status"):
-        p[PROPERTY_MAP["status"]] = {"select": {"name": READY_STATUS_VALUE}}
-    if PROPERTY_MAP.get("sub_project"):
-        p[PROPERTY_MAP["sub_project"]] = {"select": {"name": task["sub_project"]}}
     if PROPERTY_MAP.get("blocks"):
-        unlocks = ", ".join(task.get("blocks", []))
-        p[PROPERTY_MAP["blocks"]] = {"rich_text": [{"text": {"content": unlocks}}]}
+        p[PROPERTY_MAP["blocks"]] = {"rich_text": _text(", ".join(task.get("blocks", [])))}
+    if PROPERTY_MAP.get("notes"):
+        lines = [task["title"] or ""]
+        lines.append("needs: " + (", ".join(task.get("needs", [])) or "—"))
+        if task.get("waiting_on"):
+            lines.append("waiting on: " + ", ".join(task["waiting_on"]))
+        p[PROPERTY_MAP["notes"]] = {"rich_text": _text("\n".join(lines))}
     if PROPERTY_MAP.get("class"):
         p[PROPERTY_MAP["class"]] = {"relation": [{"id": class_id()}]}
+    if PROPERTY_MAP.get("done"):
+        p[PROPERTY_MAP["done"]] = {"checkbox": False}
     return p
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Project the ready frontier into Notion.")
+    ap = argparse.ArgumentParser(description="Project open tasks into Notion (create-only).")
     ap.add_argument("--inspect", action="store_true", help="print DB schema and exit")
     ap.add_argument("--dry-run", action="store_true", help="show changes, make none")
+    ap.add_argument("--all", action="store_true", help="push blocked tasks too, not just the frontier")
+    ap.add_argument("--checked", action="store_true",
+                    help="list open tasks ticked in Notion (for session-close reconcile) and exit")
     ap.add_argument("--ready", default="docs/ready_set.json")
     args = ap.parse_args()
 
+    load_project_env()
     if args.inspect:
         inspect()
         return 0
 
     data = json.loads(Path(args.ready).read_text(encoding="utf-8"))
-    frontier = {t["gid"]: t for t in data["ready"]}
+    if "done" not in data:
+        sys.exit(f"{args.ready} has no 'done' list — update tools/ready_set.py and re-run it")
+    open_tasks = {t["gid"]: t for t in data["ready"] + data["blocked"]}
+    source = open_tasks if args.all else {t["gid"]: t for t in data["ready"]}
+    done = set(data["done"])
     existing = query_existing()
 
-    to_create = [t for gid, t in frontier.items() if gid not in existing]
-    to_archive = [(gid, pid) for gid, pid in existing.items() if gid not in frontier]
+    if args.checked:
+        hits = sorted(g for g, pg in existing.items() if pg["checked"] and g in open_tasks)
+        print(f"{len(hits)} open task(s) ticked in Notion:")
+        for g in hits:
+            print(f"  ✓ {g}  {open_tasks[g]['title'][:90]}")
+        return 0
 
-    print(f"frontier={len(frontier)}  in_notion={len(existing)}  "
-          f"create={len(to_create)}  archive={len(to_archive)}")
+    to_create = [t for gid, t in source.items() if gid not in existing]
+    to_tick = [(gid, pg["id"]) for gid, pg in existing.items()
+               if gid in done and not pg["checked"]] if PROPERTY_MAP.get("done") else []
+    orphans = [gid for gid in existing if gid not in open_tasks and gid not in done]
+
+    print(f"source={'all open' if args.all else 'ready'}({len(source)})  in_notion={len(existing)}  "
+          f"create={len(to_create)}  tick={len(to_tick)}  orphans={len(orphans)} (left alone)")
 
     if args.dry_run:
         for t in to_create:
-            print(f"  + create {t['gid']}  {t['title']}")
-        for gid, _ in to_archive:
-            print(f"  - archive {gid}")
+            print(f"  + create {page_title(t)}")
+        for gid, _ in to_tick:
+            print(f"  ✓ tick   {gid}")
+        for gid in orphans:
+            print(f"  ? orphan {gid} (not in any ROADMAP — untouched)")
         return 0
 
     for t in to_create:
@@ -158,10 +213,10 @@ def main() -> int:
             "properties": task_properties(t)})
         print(f"  + {t['gid']}: {'ok' if r.status_code == 200 else r.text[:200]}")
 
-    for gid, pid in to_archive:
+    for gid, pid in to_tick:
         r = requests.patch(f"{API}/pages/{pid}", headers=headers(), timeout=30,
-                           json={"archived": True})
-        print(f"  - {gid}: {'archived' if r.status_code == 200 else r.text[:200]}")
+                           json={"properties": {PROPERTY_MAP["done"]: {"checkbox": True}}})
+        print(f"  ✓ {gid}: {'ticked' if r.status_code == 200 else r.text[:200]}")
 
     print("done.")
     return 0
