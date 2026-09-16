@@ -2,6 +2,9 @@
 
 *Decided 2026-09-16. Replaces an earlier wake-on-LAN / Raspberry Pi design, which was dropped.*
 
+**Step-by-step setup: [REMOTE_ACCESS_GUIDE.md](REMOTE_ACCESS_GUIDE.md).** Note: Remote Control connects
+through claude.ai and does not need Tailscale; Tailscale is for SSH, Remote Desktop and the local dashboard.
+
 ## The decision
 **The desktop stays on, and sessions are planned.**
 
@@ -29,7 +32,7 @@ dropped wake chain worth keeping.
 ## Setup — one evening, then leave it alone
 | # | What | Why |
 |---|---|---|
-| 1 | **Tailscale** on desktop, laptop and phones, set to run **unattended** on the desktop | How you reach the machine. Without unattended mode, a reboot leaves it unreachable until someone logs in locally. It also replaces any public DNS exposure, which is strictly safer |
+| 1 | **Tailscale** on desktop, laptop and phones, set to run **unattended** on the desktop | How you reach the machine for SSH, Remote Desktop and the dashboard (Remote Control itself doesn't need it). Without unattended mode, a reboot leaves it unreachable until someone logs in locally. It also replaces any public DNS exposure, which is strictly safer |
 | 2 | **Power settings: never sleep, never hibernate** | Disk and display sleep are fine; system sleep kills the session |
 | 3 | **Windows Update → notify**, not auto-restart | An unattended reboot is the realistic way this fails |
 | 4 | Run `claude` once in the project dir by hand | Accepts the workspace trust dialog, which a service cannot answer |
@@ -41,7 +44,7 @@ claude remote-control --spawn worktree --capacity 4 --name "olymp"
 ```
 
 Auto-start per OS:
-- **Windows** — Task Scheduler task, trigger *At startup*, "run whether user is logged on or not".
+- **Windows** — Task Scheduler task, trigger *At log on* (the Claude login lives in the user profile), restart on failure; see the guide.
 - **macOS** — `launchd` LaunchAgent with `RunAtLoad` + `KeepAlive`.
 - **Linux** — `systemd --user` unit + `loginctl enable-linger`.
 
@@ -53,7 +56,8 @@ in Notion         schedule the tasks you intend to do
                        ↓
 before leaving    confirm remote-control is running
                        ↓
-away              phone → Tailscale → desktop → the planned packet
+away              phone → Claude app → desktop (Remote Control) → the planned packet
+                  (Tailscale only for SSH / Remote Desktop / the local dashboard)
                        ↓
 end of trip       lock screen — or shut down only if returning physically
 ```
