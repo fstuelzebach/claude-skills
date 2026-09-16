@@ -1,6 +1,6 @@
 ---
-name: push-todos
-description: Project the project's open ROADMAP tasks into the Notion Tasks database as pages (create-only), so they can be scheduled by hand in Notion. Default pushes the ready frontier; "push-todos all" pushes every unchecked task including blocked ones. Use as Step 7 of session-close, or when the user says "push todos", "push tasks to notion", or "sync tasks".
+name: push-tasks
+description: Project the project's open ROADMAP tasks into the Notion Tasks database as pages (create-only), so they can be scheduled by hand in Notion. Default pushes the ready frontier; "push-tasks all" pushes every unchecked task including blocked ones. Use as Step 8 of session-close, or when the user says "push tasks", "push todos", "push tasks to notion", or "sync tasks".
 ---
 
 # Push open tasks to Notion
@@ -9,8 +9,8 @@ A one-way, **create-only** projection of open tasks into the Notion Tasks DB.
 ROADMAPs are the truth; Notion is where the user decides *when* to do things.
 
 **Before starting:** read `## Claude Skills Config` in `CLAUDE.md` to resolve
-`{todos_script}` (default `python tools/notion_sync.py`) and `{ready_set_output}`
-(default `docs/ready_set.json`). The script reads `.claude/project.env`
+`{tasks_push_script}` (default `python tools/notion_push_tasks.py`) and `{frontier_output}`
+(default `docs/roadmap_frontier.json`). The script reads `.claude/project.env`
 (`NOTION_CLASS_PAGE_ID`) itself; `NOTION_TOKEN` and `NOTION_TASKS_DB_ID` come from
 the global environment.
 
@@ -23,12 +23,12 @@ the global environment.
 - **Datum** left empty — scheduling is done by hand in Notion
 
 ## Procedure
-1. Make sure `{ready_set_output}` is fresh — run the frontier script first if this
-   is not already Step 7 of `session-close`.
+1. Make sure `{frontier_output}` is fresh — run the frontier script first if this
+   is not already Step 8 of `session-close`.
 2. **Preview:**
    ```bash
-   {todos_script} --dry-run            # ready frontier
-   {todos_script} --dry-run --all      # when invoked as "push-todos all"
+   {tasks_push_script} --dry-run            # ready frontier
+   {tasks_push_script} --dry-run --all      # when invoked as "push-tasks all"
    ```
    Show the user the summary line (create / tick / orphans).
 3. **Push** with the same arguments minus `--dry-run`. No extra confirmation is
@@ -44,10 +44,13 @@ the global environment.
   them so the user can tidy up by hand.
 
 ## The return path
-The checkbox is the only field that flows back, and it is a *signal*:
-`{todos_script} --checked` lists open tasks ticked in Notion. `session-close`
-Step 1 reads that list, confirms with the user, and flips the ROADMAP lines —
-after which the ROADMAP is authoritative again.
+Notion is a golden source for planning, so two things flow back — both handled
+by `session-close` Step 1, never by this skill:
+- `{tasks_push_script} --checked` — open tasks ticked in Notion (a completion
+  signal; confirmed with the user, then flipped to `[x]` in the ROADMAP).
+- `{tasks_push_script} --inbox --since DATE` — pages created or edited in Notion
+  that are not linked to a task yet; each becomes a ROADMAP task or CHANGELOG
+  entry, then `--link PAGE_ID GID` marks it ingested.
 
 If `NOTION_TOKEN` / `NOTION_TASKS_DB_ID` / `NOTION_CLASS_PAGE_ID` is missing, STOP
 and point the user to setup — never invent an id.

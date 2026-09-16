@@ -93,6 +93,28 @@ if [ -d "$SKILLS_REPO/agents" ]; then
   done
 fi
 
+# 2b. Retired/renamed items: manifest entries (copy mode) or symlinks into this repo
+#     (link mode) whose source no longer exists are removed from the project.
+echo ""; echo "→ Retired items:"
+removed=0
+if [ -s "$MANIFEST" ]; then
+  while IFS= read -r key; do
+    [ -z "$key" ] && continue
+    if [ ! -e "$SKILLS_REPO/$key" ]; then
+      rm -rf "${CLAUDE_DIR:?}/$key"
+      grep -vxF "$key" "$MANIFEST" > "$MANIFEST.tmp" || true
+      mv "$MANIFEST.tmp" "$MANIFEST"
+      echo "  - $key (no longer in claude-skills — removed)"; removed=1
+    fi
+  done < <(cat "$MANIFEST")
+fi
+for link in "$CLAUDE_DIR/skills"/* "$CLAUDE_DIR/agents"/*; do
+  if [ -L "$link" ] && [ ! -e "$link" ] && [[ "$(readlink "$link")" == "$SKILLS_REPO"* ]]; then
+    rm -f "$link"; echo "  - $(basename "$link") (dangling symlink — removed)"; removed=1
+  fi
+done
+[ "$removed" = 0 ] && echo "  (none)"
+
 # first_copy <src dir> <dest dir> — copy files that don't exist yet
 first_copy() {
   mkdir -p "$2"

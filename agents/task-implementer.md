@@ -1,5 +1,5 @@
 ---
-name: implementer
+name: task-implementer
 description: Executes exactly one ratified task from its task packet (docs/packets/{task-id}.md) inside an isolated git worktree. Use when session-close has dispatched a track and the packet exists. Stays inside the packet's file boundary and surfaces open questions instead of deciding them.
 model: sonnet
 isolation: worktree
@@ -19,7 +19,7 @@ open question, not a licence to guess.
 ## Boundary — hard rules
 - Edit **only** files matching the packet's allow-list.
 - Never edit anything on the forbid-list. It always includes: any `ROADMAP.md`,
-  the dashboard file (`DASHBOARD.md`), `docs/ready_set.json`, other packets, and
+  the dashboard file (`PROJECT_STATUS.md`), `docs/roadmap_frontier.json`, other packets, and
   config owned by another track.
 - Needing a file outside the allow-list means the packet is wrong: stop, report
   which file and why. Do not "just quickly" change it.

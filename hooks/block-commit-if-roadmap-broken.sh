@@ -1,11 +1,11 @@
 #!/bin/bash
-# guard-commit.sh — PreToolUse hook: deny `git commit` while the ROADMAP graph is broken.
+# block-commit-if-roadmap-broken.sh — PreToolUse hook: deny `git commit` while the ROADMAP graph is broken.
 #
 # Registered for the Bash and PowerShell tools (see settings.snippet.json). It ignores
 # every command except a real `git commit`. On a commit it runs
-#   python tools/ready_set.py --check
+#   python tools/roadmap_frontier.py --check
 # (read-only structural validation) and, if that fails, denies the tool call and hands
-# the parser's errors back to Claude. Projects without tools/ready_set.py are a no-op.
+# the parser's errors back to Claude. Projects without tools/roadmap_frontier.py are a no-op.
 #
 # This enforces the session-close rule "if the parser errors, fix the ROADMAP syntax;
 # do not work around it" mechanically. A Stop hook cannot do this — it fires after the
@@ -59,7 +59,7 @@ if not any(is_git_commit(s) for s in segments):
     sys.exit(0)
 
 root = Path(os.environ.get("CLAUDE_PROJECT_DIR") or event.get("cwd") or ".")
-script = root / "tools" / "ready_set.py"
+script = root / "tools" / "roadmap_frontier.py"
 if not script.exists() or "--check" not in script.read_text(encoding="utf-8", errors="replace"):
     sys.exit(0)   # no parser, or an old copy without --check: nothing to enforce
 
@@ -73,7 +73,7 @@ print(json.dumps({"hookSpecificOutput": {
     "hookEventName": "PreToolUse",
     "permissionDecision": "deny",
     "permissionDecisionReason": (
-        "Commit blocked: tools/ready_set.py --check failed. Fix the ROADMAP syntax "
+        "Commit blocked: tools/roadmap_frontier.py --check failed. Fix the ROADMAP syntax "
         "(do not work around it), then commit again.\n" + detail),
 }}))
 sys.exit(0)

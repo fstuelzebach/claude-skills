@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-commit.sh\"",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/block-commit-if-roadmap-broken.sh\"",
             "timeout": 30
           }
         ]

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ready_set.py  ·  Deterministic eligibility computer for the Olymp Capital workflow.
+roadmap_frontier.py  ·  Deterministic eligibility computer for the Olymp Capital workflow.
 
 WHAT IT DOES
     Reads every docs/**/ROADMAP.md, parses the structured task graph, and computes
@@ -15,9 +15,10 @@ WHY IT EXISTS
     on top of guaranteed-correct input.
 
 USAGE
-    python tools/ready_set.py                 # print summary + write docs/ready_set.json
-    python tools/ready_set.py --json           # print full JSON to stdout
-    python tools/ready_set.py --root docs      # point at a different docs root
+    python tools/roadmap_frontier.py                 # print summary + write docs/roadmap_frontier.json
+    python tools/roadmap_frontier.py --json           # print full JSON to stdout
+    python tools/roadmap_frontier.py --root docs      # point at a different docs root
+    python tools/roadmap_frontier.py --check          # validate structure only (commit guard)
 
 NO DEPENDENCIES  -- standard library only, so it runs anywhere with Python 3.8+.
 
@@ -29,6 +30,12 @@ TASK LINE FORMAT (in any ROADMAP.md)
     id in its needs is done; otherwise it is "blocked".
     Bare ids (T1) resolve within the file's sub_project; cross-project refs are
     namespaced (ingestion.T3).
+    `hold:<reason>` parks an open task: it leaves the ready frontier and is
+    listed under "held" instead (plan-gated, dead end, waiting on a decision).
+
+CHANGELOG.md (optional, next to a ROADMAP.md)
+    Done tasks moved out of the ROADMAP by tools/archive_done_tasks.py. Every task
+    there counts as done, so needs: edges and duplicate-id checks keep working.
 
 FRONT-MATTER (top of each ROADMAP.md, optional but recommended)
     ---
@@ -87,11 +94,12 @@ def split_ids(raw: str) -> list[str]:
     return [p.strip() for p in raw.split(',') if p.strip() and p.strip().lower() not in _NONE_PLACEHOLDERS]
 
 
-def parse_roadmap(path: Path, docs_root: Path) -> dict:
+def parse_roadmap(path: Path, docs_root: Path, sub_override: str | None = None,
+                  force_done: bool = False) -> dict:
     text = path.read_text(encoding='utf-8')
     fm, body = parse_front_matter(text)
     # sub_project defaults to the parent folder name if not declared.
-    sub = fm.get('sub_project') or path.parent.name
+    sub = sub_override or fm.get('sub_project') or path.parent.name
     try:
         priority = int(fm.get('priority', 99))
     except ValueError:
@@ -116,7 +124,9 @@ def parse_roadmap(path: Path, docs_root: Path) -> dict:
             'id': tid,
             'gid': f'{sub}.{tid}' if '.' not in tid else tid,
             'title': title,
-            'done': status_char.lower() == 'x',
+            'done': force_done or status_char.lower() == 'x',
+            'hold': tags.get('hold'),
+            'archived': force_done,
             'needs': [resolve(n, sub) for n in split_ids(tags.get('needs', ''))],
             'blocks': [resolve(b, sub) for b in split_ids(tags.get('blocks', ''))],
             'prio': int(tags['prio']) if tags.get('prio', '').isdigit() else None,
@@ -135,9 +145,26 @@ def normalize_title(t: str) -> str:
     return re.sub(r'[^a-z0-9 ]', '', t.lower()).strip()
 
 
+def load_projects(docs_root: Path) -> list[dict]:
+    """One project per ROADMAP.md, with its sibling CHANGELOG.md (archived, all
+    done) folded in under the same sub_project."""
+    projects = []
+    for path in sorted(docs_root.glob('**/ROADMAP.md')):
+        proj = parse_roadmap(path, docs_root)
+        changelog = path.with_name('CHANGELOG.md')
+        if changelog.exists():
+            archived = parse_roadmap(changelog, docs_root, sub_override=proj['sub_project'],
+                                     force_done=True)
+            base = len(proj['tasks'])
+            for t in archived['tasks']:
+                t['order'] += base
+            proj['tasks'].extend(archived['tasks'])
+        projects.append(proj)
+    return projects
+
+
 def compute(docs_root: Path) -> dict:
-    roadmaps = sorted(docs_root.glob('**/ROADMAP.md'))
-    projects = [parse_roadmap(p, docs_root) for p in roadmaps]
+    projects = load_projects(docs_root)
 
     all_tasks: dict[str, dict] = {}
     for proj in projects:
@@ -147,7 +174,7 @@ def compute(docs_root: Path) -> dict:
             all_tasks[t['gid']] = t
     done = {gid for gid, t in all_tasks.items() if t['done']}
 
-    ready, blocked = [], []
+    ready, blocked, held = [], [], []
     for gid, t in all_tasks.items():
         if t['done'] or t['_proj_status'] != 'active':
             continue
@@ -157,11 +184,16 @@ def compute(docs_root: Path) -> dict:
             'gid': gid, 'sub_project': gid.split('.')[0], 'title': t['title'],
             'needs': t['needs'], 'blocks': t['blocks'],
         }
-        if unmet:
+        if t['hold']:
+            record['hold'] = t['hold']
+            held.append(record)
+        elif unmet:
             record['waiting_on'] = unmet
             blocked.append(record)
         else:
-            record['_sort'] = (t['prio'] if t['prio'] is not None else t['_proj_priority'], t['order'])
+            # ties: sub-project priority, then position in its ROADMAP (stable across archiving)
+            record['_sort'] = (t['prio'] if t['prio'] is not None else t['_proj_priority'],
+                               t['_proj_priority'], t['order'])
             ready.append(record)
     ready.sort(key=lambda r: r.pop('_sort'))
 
@@ -173,10 +205,11 @@ def compute(docs_root: Path) -> dict:
         ndone = sum(1 for t in tasks if t['done'])
         nready = sum(1 for r in ready if r['sub_project'] == proj['sub_project'])
         nblocked = sum(1 for b in blocked if b['sub_project'] == proj['sub_project'])
+        nheld = sum(1 for h in held if h['sub_project'] == proj['sub_project'])
         rollup.append({
             'sub_project': proj['sub_project'], 'status': proj['status'],
             'priority': proj['priority'], 'total': n, 'done': ndone,
-            'ready': nready, 'blocked': nblocked,
+            'ready': nready, 'blocked': nblocked, 'held': nheld,
             'pct_done': round(100 * ndone / n) if n else 0,
         })
     rollup.sort(key=lambda r: r['priority'])
@@ -197,18 +230,20 @@ def compute(docs_root: Path) -> dict:
         'generated_from': str(docs_root),
         'ready': ready,
         'blocked': blocked,
+        'held': held,
         'rollup': rollup,
         'redundancies': redundancies,
-        # Done gids (all sub-projects) — lets notion_sync tick checkboxes without guessing.
+        # Done gids (all sub-projects, archived included) — lets notion_push_tasks
+        # tick checkboxes without guessing.
         'done': sorted(done),
-        'counts': {'ready': len(ready), 'blocked': len(blocked),
+        'counts': {'ready': len(ready), 'blocked': len(blocked), 'held': len(held),
                    'sub_projects': len(projects), 'tasks': len(all_tasks)},
     }
 
 
 def print_summary(d: dict) -> None:
     c = d['counts']
-    print(f"\n  READY FRONTIER — {c['ready']} actionable / {c['blocked']} blocked "
+    print(f"\n  READY FRONTIER — {c['ready']} actionable / {c['blocked']} blocked / {c['held']} held "
           f"across {c['sub_projects']} sub-projects ({c['tasks']} tasks)\n")
     if d['ready']:
         print("  NOW / NEXT (dependency-ordered, eligible):")
@@ -220,7 +255,7 @@ def print_summary(d: dict) -> None:
     print("\n  ROLLUP:")
     for r in d['rollup']:
         print(f"    {r['sub_project']:<18} {r['pct_done']:>3}% done  "
-              f"| ready {r['ready']}  blocked {r['blocked']}  ({r['status']})")
+              f"| ready {r['ready']}  blocked {r['blocked']}  held {r['held']}  ({r['status']})")
     if d['redundancies']:
         print("\n  ⚠ POSSIBLE REDUNDANCIES (review):")
         for x in d['redundancies']:
@@ -236,8 +271,8 @@ LOOSE_TASK_RE = re.compile(r'^\s*[-*+]\s*\[[^\]]*\].*(\*\*[A-Za-z0-9_.\-]+\*\*|`
 def validate(docs_root: Path) -> list[str]:
     """Structural errors that would silently corrupt the frontier. Empty = OK."""
     errors: list[str] = []
-    projects = []
-    for path in sorted(docs_root.glob('**/ROADMAP.md')):
+    paths = sorted(list(docs_root.glob('**/ROADMAP.md')) + list(docs_root.glob('**/CHANGELOG.md')))
+    for path in paths:
         try:
             text = path.read_text(encoding='utf-8')
         except UnicodeDecodeError as e:
@@ -248,10 +283,12 @@ def validate(docs_root: Path) -> list[str]:
         for i, line in enumerate(body.splitlines(), start=1 + offset):
             if LOOSE_TASK_RE.match(line) and not TASK_RE.match(line):
                 errors.append(f"{path}:{i}: malformed task line: {line.strip()[:80]}")
-        projects.append((path, parse_roadmap(path, docs_root)))
+    if any('not valid UTF-8' in e for e in errors):
+        return errors
 
-    tasks: dict[str, tuple[Path, dict]] = {}
-    for path, proj in projects:
+    tasks: dict[str, tuple[str, dict]] = {}
+    for proj in load_projects(docs_root):
+        path = proj['path']
         for t in proj['tasks']:
             if t['gid'] in tasks:
                 errors.append(f"{path}: duplicate task id {t['gid']} "
@@ -291,7 +328,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Compute the ready frontier from ROADMAP.md files.")
     ap.add_argument('--root', default='docs', help="docs root to scan (default: docs)")
     ap.add_argument('--json', action='store_true', help="print full JSON to stdout")
-    ap.add_argument('--out', default='docs/ready_set.json', help="where to write the JSON")
+    ap.add_argument('--out', default='docs/roadmap_frontier.json', help="where to write the JSON")
     ap.add_argument('--check', action='store_true',
                     help="validate ROADMAP structure only; write nothing; exit 1 on errors")
     args = ap.parse_args()

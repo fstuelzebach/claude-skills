@@ -8,7 +8,7 @@
 Designing for *unplanned* access means building a wake chain: BIOS flags, a magic-packet
 sender, an always-on Pi, a boot service. You then debug that chain only when you are away from
 the machine and least able to fix it. But planned work is the whole premise of this system:
-`ready_set.py` computes what is eligible, `push-todos` puts it in Notion, and you schedule it. A
+`roadmap_frontier.py` computes what is eligible, `push-tasks` puts it in Notion, and you schedule it. A
 session that wasn't planned has no packet and no ratified track. Optimising access for it
 optimises for the case the method exists to avoid.
 
@@ -47,7 +47,7 @@ Auto-start per OS:
 
 ## The planned-session loop
 ```
-at the desk       session-close → push-todos → Notion Tasks
+at the desk       session-close → push-tasks → Notion Tasks
                        ↓
 in Notion         schedule the tasks you intend to do
                        ↓
@@ -93,4 +93,4 @@ because the work runs where that environment already lives. Worth doing, but not
       whether it mattered.
 
 Never put secrets in the repo, `CLAUDE.md`, a mirrored doc, a prompt or skill file, or a Notion
-page. `push-notion-mirror` refuses to push a doc that contains a secret; keep that guard.
+page. `push-docs` refuses to push a doc that contains a secret; keep that guard.

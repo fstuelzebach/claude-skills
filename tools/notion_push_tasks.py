@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
 """
-notion_sync.py  ·  One-way, create-only projection of open tasks into Notion.
+notion_push_tasks.py  ·  One-way, create-only projection of open tasks into Notion.
 
 WHAT IT DOES
-    Reads docs/ready_set.json and projects open tasks into a Notion Tasks DB
-    (used by the `push-todos` skill):
+    Reads docs/roadmap_frontier.json and projects open tasks into a Notion Tasks DB
+    (used by the `push-tasks` skill):
       · creates a page for each open task that has no page yet
         (default: the ready frontier; --all: every unchecked task, incl. blocked),
       · ticks the checkbox on pages whose task is now [x] in a ROADMAP.
     It NEVER archives or deletes pages and never touches Datum — scheduling is done
     by hand in Notion, and a page must not vanish because its task became blocked.
-    It never writes to ROADMAPs. The checkbox flows back only as a *signal*:
-    `--checked` lists pages ticked in Notion whose task is still open, and the
-    session-close ritual flips those ROADMAP lines by hand. ROADMAPs stay the truth.
+    It never writes to ROADMAPs itself. Two things flow back from Notion, and the
+    session-close ritual turns them into ROADMAP / CHANGELOG edits by hand:
+      · `--checked` — pages ticked in Notion whose task is still open;
+      · `--inbox`   — planning input: pages of this project's Class that have no
+        task_key yet (tasks and notes you created in Notion). Once session-close
+        has turned one into a ROADMAP task (open) or CHANGELOG entry (done),
+        `--link PAGE_ID GID` writes the task_key back so it is not ingested twice.
 
 SETUP
     pip install requests
@@ -25,11 +29,13 @@ SETUP
     ··· menu -> Connections -> add your integration.
 
 USAGE
-    python tools/notion_sync.py --inspect          # print DB schema (connection test)
-    python tools/notion_sync.py --dry-run          # show what would change
-    python tools/notion_sync.py                    # push the ready frontier
-    python tools/notion_sync.py --all [--dry-run]  # push every unchecked task
-    python tools/notion_sync.py --checked          # list open tasks ticked in Notion
+    python tools/notion_push_tasks.py --inspect          # print DB schema (connection test)
+    python tools/notion_push_tasks.py --dry-run          # show what would change
+    python tools/notion_push_tasks.py                    # push the ready frontier
+    python tools/notion_push_tasks.py --all [--dry-run]  # push every unchecked task
+    python tools/notion_push_tasks.py --checked          # list open tasks ticked in Notion
+    python tools/notion_push_tasks.py --inbox --since 2026-09-15  # Notion-born items not yet in git
+    python tools/notion_push_tasks.py --link <page> <gid>  # mark an inbox page as ingested
 
 CONFIGURE the PROPERTY_MAP below to match your DB's exact property names.
 Run --inspect first to see them.
@@ -129,6 +135,45 @@ def query_existing() -> dict[str, dict]:
         payload["start_cursor"] = data["next_cursor"]
 
 
+def query_inbox(since: str | None = None) -> list[dict]:
+    """Pages of this project's Class with an empty task_key: Notion-born input."""
+    out: list[dict] = []
+    payload: dict = {"page_size": 100, "filter": {"and": [
+        {"property": PROPERTY_MAP["class"], "relation": {"contains": class_id()}},
+        {"property": PROPERTY_MAP["task_key"], "rich_text": {"is_empty": True}},
+    ]}}
+    if since:
+        payload["filter"]["and"].append(
+            {"timestamp": "last_edited_time", "last_edited_time": {"on_or_after": since}})
+    while True:
+        r = requests.post(f"{API}/databases/{db_id()}/query",
+                          headers=headers(), json=payload, timeout=30)
+        if r.status_code != 200:
+            sys.exit(f"inbox query failed [{r.status_code}]: {r.text[:300]}")
+        data = r.json()
+        for page in data["results"]:
+            props = page["properties"]
+            title = "".join(t["plain_text"] for t in props.get(PROPERTY_MAP["title"], {}).get("title", []))
+            notes = "".join(t["plain_text"] for t in props.get(PROPERTY_MAP.get("notes") or "", {}).get("rich_text", []))
+            done_prop = PROPERTY_MAP.get("done")
+            out.append({
+                "id": page["id"], "url": page.get("url", ""), "title": title,
+                "checked": bool(props.get(done_prop, {}).get("checkbox")) if done_prop else False,
+                "notes": notes, "edited": page.get("last_edited_time", "")[:10],
+            })
+        if not data.get("has_more"):
+            return out
+        payload["start_cursor"] = data["next_cursor"]
+
+
+def link_page(page_id: str, gid: str) -> None:
+    r = requests.patch(f"{API}/pages/{page_id}", headers=headers(), timeout=30,
+                       json={"properties": {PROPERTY_MAP["task_key"]: {"rich_text": _text(gid)}}})
+    if r.status_code != 200:
+        sys.exit(f"link failed [{r.status_code}]: {r.text[:300]}")
+    print(f"linked {page_id} -> {gid}")
+
+
 def _text(s: str, limit: int = RICH_TEXT_MAX) -> list[dict]:
     return [{"text": {"content": s[:limit]}}]
 
@@ -167,17 +212,36 @@ def main() -> int:
     ap.add_argument("--all", action="store_true", help="push blocked tasks too, not just the frontier")
     ap.add_argument("--checked", action="store_true",
                     help="list open tasks ticked in Notion (for session-close reconcile) and exit")
-    ap.add_argument("--ready", default="docs/ready_set.json")
+    ap.add_argument("--inbox", action="store_true",
+                    help="list this project's Notion pages that have no task_key yet, and exit")
+    ap.add_argument("--since", metavar="YYYY-MM-DD",
+                    help="with --inbox: only pages edited on/after this date (session-close passes "
+                         "the last status-file regeneration date)")
+    ap.add_argument("--link", nargs=2, metavar=("PAGE_ID", "GID"),
+                    help="write GID into an inbox page's task_key, and exit")
+    ap.add_argument("--ready", default="docs/roadmap_frontier.json")
     args = ap.parse_args()
 
     load_project_env()
     if args.inspect:
         inspect()
         return 0
+    if args.link:
+        link_page(*args.link)
+        return 0
+    if args.inbox:
+        items = query_inbox(args.since)
+        print(f"{len(items)} Notion inbox item(s) not yet in git:")
+        for it in items:
+            mark = "x" if it["checked"] else " "
+            print(f"  [{mark}] {it['title'][:90]}  (edited {it['edited']}, page {it['id']})")
+            if it["notes"]:
+                print(f"        notes: {it['notes'][:160]}")
+        return 0
 
     data = json.loads(Path(args.ready).read_text(encoding="utf-8"))
     if "done" not in data:
-        sys.exit(f"{args.ready} has no 'done' list — update tools/ready_set.py and re-run it")
+        sys.exit(f"{args.ready} has no 'done' list — update tools/roadmap_frontier.py and re-run it")
     open_tasks = {t["gid"]: t for t in data["ready"] + data["blocked"]}
     source = open_tasks if args.all else {t["gid"]: t for t in data["ready"]}
     done = set(data["done"])

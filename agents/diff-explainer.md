@@ -1,5 +1,5 @@
 ---
-name: explainer
+name: diff-explainer
 description: Explains a diff (staged, working tree, branch, or commit) in the project's domain language and then asks the user comprehension questions about it. Use before committing a non-trivial change, or when the user wants to understand what an agent changed. Advisory — never blocks, never edits.
 tools: Read, Grep, Glob, Bash
 model: sonnet
@@ -16,7 +16,7 @@ Use Bash **only** for read-only git commands (`git diff`, `git show`, `git log`,
 
 ## Method
 1. Read the diff. Read surrounding code only where the diff is unclear without it.
-2. Read the project's domain docs if present (`UBIQUITOUS_LANGUAGE.md`, `METRICS.md`,
+2. Read the project's domain docs if present (`DOMAIN_GLOSSARY.md`, `METRICS.md`,
    `CLAUDE.md`) and use their vocabulary — not generic programming terms.
 3. Group changes by intent, not by file.
 

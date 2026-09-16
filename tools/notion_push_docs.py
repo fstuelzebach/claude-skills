@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 """
-tools/notion_doc_sync.py
+tools/notion_push_docs.py
 
-Push local markdown docs (ROADMAPs, DASHBOARD, CLAUDE.md, UBIQUITOUS_LANGUAGE,
+Push local markdown docs (ROADMAPs, DASHBOARD, CLAUDE.md, DOMAIN_GLOSSARY,
 METRICS, DEPLOYMENT, ...) into Notion as a GENERATED, read-only mirror.
 
 Idempotent: each run WIPES the target page and rewrites it from the current file
@@ -19,9 +19,9 @@ Conversion:
   2000-char rich_text limit; blocks are appended in batches of 100.
 
 Usage:
-    python tools/notion_doc_sync.py                       # sync every doc in config
-    python tools/notion_doc_sync.py --only dashboard      # sync a subset (by key)
-    python tools/notion_doc_sync.py --dry-run             # print block counts only
+    python tools/notion_push_docs.py                       # sync every doc in config
+    python tools/notion_push_docs.py --only dashboard      # sync a subset (by key)
+    python tools/notion_push_docs.py --dry-run             # print block counts only
 """
 from __future__ import annotations
 
@@ -55,7 +55,7 @@ except ModuleNotFoundError:  # pragma: no cover
 # --------------------------------------------------------------------------- #
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = PROJECT_ROOT / "conf" / "notion_mirror.toml"
-CACHE_PATH = PROJECT_ROOT / "data" / "notion_sync_cache.json"
+CACHE_PATH = PROJECT_ROOT / "data" / "notion_push_docs_cache.json"
 
 MAX_TEXT = 1900            # < Notion's 2000-char rich_text limit, with headroom
 MAX_CODE_CHARS = 1800      # split code/table blocks longer than this
@@ -215,7 +215,7 @@ _HTML_COMMENT_RE = re.compile(r"<!--.*?-->\n?", re.DOTALL)
 
 
 def _strip_html_comments(md: str) -> str:
-    """Drop <!-- ... --> blocks (e.g. DASHBOARD.md's generation-metadata header)
+    """Drop <!-- ... --> blocks (e.g. PROJECT_STATUS.md's generation-metadata header)
     before conversion — they're notes for git readers, not Notion content."""
     return _HTML_COMMENT_RE.sub("", md)
 

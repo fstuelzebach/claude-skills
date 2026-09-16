@@ -1,5 +1,5 @@
 ---
-name: push-notion-mirror
+name: push-docs
 description: Push the project's canonical docs into Notion as a generated, read-only mirror by running the mirror script from CLAUDE.md. Use as the final step of the session-close ritual (after the dashboard is regenerated and committed), or on demand when the user says "push mirror", "sync notion", "update notion mirror", or "mirror the docs".
 ---
 
@@ -10,11 +10,11 @@ stay current on a **private** repo. Truth stays in git; the Notion pages are
 generated and overwritten on every run — they are a reading surface, never a
 source of truth.
 
-This is distinct from `notion_sync.py` (which projects the task *frontier* into
+This is distinct from `notion_push_tasks.py` (which projects the task *frontier* into
 Notion Progress Tasks for scheduling). This skill mirrors whole *documents*.
 
 **Before starting:** read the `## Claude Skills Config → Notion Integration` section
-in `CLAUDE.md` to resolve `{mirror_script}` and `{mirror_config}`. Then source the
+in `CLAUDE.md` to resolve `{docs_push_script}` and `{docs_push_config}`. Then source the
 per-project env file for credentials:
 ```bash
 [ -f .claude/project.env ] && source .claude/project.env
@@ -28,7 +28,7 @@ Global secrets (`NOTION_TOKEN`, `NOTION_TASKS_DB_ID`) come from `~/.zshrc` or
 - **On demand:** "push mirror", "sync notion", "update notion mirror".
 
 ## Preconditions — fail loudly, never paper over
-1. `{mirror_config}` exists and every `[[docs]]` entry you intend to push has a
+1. `{docs_push_config}` exists and every `[[docs]]` entry you intend to push has a
    non-empty `page_id`. If any are empty, STOP and tell the user to complete
    one-time Notion setup (`docs/SETUP_NOTION_MIRROR.md`). **Never invent a page_id.**
 2. `NOTION_TOKEN` is set in the environment. If the script reports it missing,
@@ -43,15 +43,15 @@ Global secrets (`NOTION_TOKEN`, `NOTION_TASKS_DB_ID`) come from `~/.zshrc` or
 2. **Preview:**
    ```bash
    [ -f .claude/project.env ] && source .claude/project.env
-   python {mirror_script} --dry-run
+   python {docs_push_script} --dry-run
    ```
    Show the user the per-doc block counts. Flag any doc reporting 0 blocks or "not found".
 3. **Push:**
    ```bash
    [ -f .claude/project.env ] && source .claude/project.env
-   python {mirror_script}
+   python {docs_push_script}
    ```
-   For a subset, use `--only <key> <key>` (keys are defined in `{mirror_config}`).
+   For a subset, use `--only <key> <key>` (keys are defined in `{docs_push_config}`).
 4. **Report** one line per doc: synced / skipped / block count / wiped count.
    Surface any API error verbatim — the script already retries rate limits; do not
    add silent retries.

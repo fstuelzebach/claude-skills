@@ -30,14 +30,14 @@ The two are intertwined: skills define the method, Notion gives it continuity. A
 | `caveman` | No | Ultra-compressed communication mode (~75% fewer tokens, zero loss of precision) |
 | `grill-me` | No | Dependency-aware interview in rounds of 2–4 questions (with recommendations) to stress-test a plan or design before committing; `quick` for one-at-a-time |
 | `improve-prompt` | No | Diagnose a prompt against ten axes (scope, test data, permissions, evidence standard, output contract, candour, …) and return a paste-ready rewrite |
-| `deepening` | No | Deepen a cluster of shallow modules safely — classify dependencies, choose seams/adapters, replace rather than layer tests |
-| `view` | No | Write the last response to a temp file and open it in PyCharm, so you can read and chat side by side |
+| `deepen-modules` | No | Deepen a cluster of shallow modules safely — classify dependencies, choose seams/adapters, replace rather than layer tests |
+| `view` | No | Write the last response to a temp file and open it in PyCharm (macOS, Windows, Linux), so you can read and chat side by side |
+| `view-clean` | No | Delete the temp files `view` created |
 | `handoff` | No | Compact the current conversation into a structured handoff doc for the next agent or session |
-| `zoom-out` | No | Map all relevant modules and callers when unfamiliar with an area of code |
-| `ubiquitous-language` | No | Extract a DDD-style domain glossary from the conversation, saved to `UBIQUITOUS_LANGUAGE.md` |
-| `session-close` | Steps 7 & 9 only | End-of-session ritual (v2): reconcile ROADMAPs → compute dependency frontier → group it into isolated parallel tracks → ratify → write task packets → regenerate dashboard → push open tasks to Notion → atomic commit → mirror docs |
-| `push-todos` | Yes | Create-only projection of open tasks into the Notion Tasks DB (ready frontier by default, `all` for blocked too); ticks pages of done tasks, never archives, never sets dates |
-| `push-notion-mirror` | Yes | Push canonical project docs (ROADMAPs, dashboard, CLAUDE.md, …) to Notion as a generated, read-only mirror |
+| `domain-glossary` | No | Extract a DDD-style domain glossary from the conversation, saved to `DOMAIN_GLOSSARY.md` |
+| `session-close` | Steps 1, 8 & 10 only | End-of-session ritual: clean-tree check → ingest Notion planning input → reconcile ROADMAPs/CHANGELOGs → compute dependency frontier → group it into isolated parallel tracks → ratify → write task packets → regenerate the one-screen status file → push open tasks to Notion → commit + push → mirror docs |
+| `push-tasks` | Yes | Create-only projection of open tasks into the Notion Tasks DB (ready frontier by default, `all` for blocked too); ticks pages of done tasks, never archives, never sets dates |
+| `push-docs` | Yes | Push canonical project docs (ROADMAPs, dashboard, CLAUDE.md, …) to Notion as a generated, read-only mirror |
 
 ---
 
@@ -45,9 +45,11 @@ The two are intertwined: skills define the method, Notion gives it continuity. A
 
 I use a single Notion workspace as a second brain across all projects. Each project gets its own domain within it — its own mirror pages, its own entry in the Progress Tasks database — but the workspace, token, and database are shared globally.
 
-This design choice is hardwired. It's not a plugin or an optional add-on; it's the memory architecture the `session-close` ritual is built around. The mirror keeps Notion current so it can be read on mobile, in Claude.ai, or anywhere outside the IDE. The Tasks database holds the open tasks (pushed by `push-todos`); scheduling happens there, by hand.
+This design choice is hardwired. It's not a plugin or an optional add-on; it's the memory architecture the `session-close` ritual is built around. The mirror keeps Notion current so it can be read on mobile, in Claude.ai, or anywhere outside the IDE. The Tasks database holds the open tasks (pushed by `push-tasks`); scheduling happens there, by hand.
 
-**Skills without Notion still work.** The general-purpose skills have no Notion dependency at all. `session-close` degrades gracefully — reconciliation, frontier computation, track grouping, packets, dashboard regeneration and the atomic commit are pure git + markdown. Only Step 7 (`push-todos`) and Step 9 (doc mirror) need the integration.
+**Two golden sources.** Git holds execution truth — `ROADMAP.md` (open work), `CHANGELOG.md` (finished work), code. Notion holds planning and thinking, because it is reachable from anywhere. `session-close` keeps them in step in both directions: planning input created in Notion is ingested into ROADMAP/CHANGELOG at Step 1 (`notion_push_tasks.py --inbox`), and open tasks plus mirrored docs go back out at Steps 8 and 10.
+
+**Skills without Notion still work.** The general-purpose skills have no Notion dependency at all. `session-close` degrades gracefully — reconciliation, frontier computation, track grouping, packets, the status file and the commit are pure git + markdown. Only Steps 1, 8 and 10 need the integration.
 
 ---
 
@@ -58,10 +60,10 @@ Skills are instructions; agents are separate workers with their own context, mod
 | Agent | Model | What it does |
 |---|---|---|
 | `scout` | haiku | Read-only exploration — where things live, callers, module summaries — so the main context stays clean |
-| `explainer` | sonnet | Explains a diff in the project's domain language and asks comprehension questions. Advisory, never blocks |
-| `implementer` | sonnet | Executes one task packet (`docs/packets/{task-id}.md`) inside its own git worktree, strictly within the packet's file boundary |
+| `diff-explainer` | sonnet | Explains a diff in the project's domain language and asks comprehension questions. Advisory, never blocks |
+| `task-implementer` | sonnet | Executes one task packet (`docs/packets/{task-id}.md`) inside its own git worktree, strictly within the packet's file boundary |
 
-Deliberately **not** built: a "frontier agent". `ready_set.py` is deterministic graph traversal — putting a model in front of it would be a regression.
+Deliberately **not** built: a "frontier agent". `roadmap_frontier.py` is deterministic graph traversal — putting a model in front of it would be a regression.
 
 ## Hooks (`hooks/` — copied into `.claude/hooks/` once)
 
@@ -69,7 +71,7 @@ Hooks give guarantees rather than instructions.
 
 | Hook | Event | What it does |
 |---|---|---|
-| `guard-commit.sh` | `PreToolUse` on `Bash` / `PowerShell` | Ignores everything except a real `git commit`. On a commit it runs `python tools/ready_set.py --check`; if the ROADMAP graph is broken (duplicate ids, malformed task lines, unknown `needs:`, cycles) the commit is **denied** and the errors are handed back. No-op in projects without `tools/ready_set.py`. |
+| `block-commit-if-roadmap-broken.sh` | `PreToolUse` on `Bash` / `PowerShell` | Ignores everything except a real `git commit`. On a commit it runs `python tools/roadmap_frontier.py --check`; if the ROADMAP graph is broken (duplicate ids, malformed task lines, unknown `needs:`, cycles) the commit is **denied** and the errors are handed back. No-op in projects without `tools/roadmap_frontier.py`. |
 
 Registration is manual: merge [`settings.snippet.json`](settings.snippet.json) into the project's `.claude/settings.json` (don't overwrite it — it holds your permissions).
 
@@ -81,9 +83,10 @@ These are standalone Python scripts that the skills call. They are copied into t
 
 | Tool | Notion required? | What it does |
 |---|---|---|
-| `ready_set.py` | No | Traverses `needs:`/`blocks:` dependency edges across all `ROADMAP.md` files → writes `docs/ready_set.json` with ready/blocked/done/rollup. `--check` validates structure only (used by the commit guard). Standard library only. |
-| `notion_doc_sync.py` | Yes | Wipes and rewrites Notion pages from local markdown (idempotent). Reads doc→page mapping from `conf/notion_mirror.toml`. Auth via `NOTION_TOKEN` env var. |
-| `notion_sync.py` | Yes | Create-only projection of open tasks into the Notion Tasks DB (used by `push-todos`): creates missing pages, ticks pages of done tasks, never archives. `--all` includes blocked tasks; `--checked` lists open tasks ticked in Notion. Reads `.claude/project.env` itself. |
+| `roadmap_frontier.py` | No | Traverses `needs:`/`blocks:` dependency edges across all `ROADMAP.md` files → writes `docs/roadmap_frontier.json` with ready/blocked/done/rollup. `--check` validates structure only (used by the commit guard). Reads sibling `CHANGELOG.md` files as done; `` `hold:reason` `` parks a task outside the frontier. Standard library only. |
+| `archive_done_tasks.py` | No | Moves finished task blocks from each `ROADMAP.md` into the sibling `CHANGELOG.md` (dry-run by default, `--apply` to move). Keeps ROADMAPs to open work. Standard library only. |
+| `notion_push_docs.py` | Yes | Wipes and rewrites Notion pages from local markdown (idempotent). Reads doc→page mapping from `conf/notion_mirror.toml`. Auth via `NOTION_TOKEN` env var. |
+| `notion_push_tasks.py` | Yes | Create-only projection of open tasks into the Notion Tasks DB (used by `push-tasks`): creates missing pages, ticks pages of done tasks, never archives. `--all` includes blocked tasks; `--checked` lists open tasks ticked in Notion; `--inbox --since DATE` lists Notion-born planning input and `--link` marks it ingested. Reads `.claude/project.env` itself. |
 
 ---
 
@@ -121,17 +124,18 @@ The generic skills read all project-specific paths from this section. No secrets
 ### Session Management
 | key | value |
 |---|---|
-| frontier_script | `python tools/ready_set.py` |
-| ready_set_output | `docs/ready_set.json` |
-| dashboard_file | `DASHBOARD.md` |
+| frontier_script | `python tools/roadmap_frontier.py` |
+| frontier_output | `docs/roadmap_frontier.json` |
+| status_file | `PROJECT_STATUS.md` |
 | packets_dir | `docs/packets` |
+| archive_script | `python tools/archive_done_tasks.py` |
 
 ### Notion Integration
 | key | value |
 |---|---|
-| mirror_script | `python tools/notion_doc_sync.py` |
-| mirror_config | `conf/notion_mirror.toml` |
-| todos_script | `python tools/notion_sync.py` |
+| docs_push_script | `python tools/notion_push_docs.py` |
+| docs_push_config | `conf/notion_mirror.toml` |
+| tasks_push_script | `python tools/notion_push_tasks.py` |
 ```
 
 > Skip the Notion Integration table entirely if you're not using Notion.
@@ -171,7 +175,7 @@ Maps local markdown files to the Notion pages they mirror into. Page IDs are not
 
 [[docs]]
 key      = "dashboard"
-path     = "DASHBOARD.md"
+path     = "PROJECT_STATUS.md"
 page_id  = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 # How to get a page ID: open the Notion page → Share → Copy link → UUID at the end of the URL
 title    = "DASHBOARD"
@@ -183,7 +187,7 @@ page_id  = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 title    = "CLAUDE.md"
 
 # One [[docs]] block per file. Use --only <key> to sync a subset:
-# python tools/notion_doc_sync.py --only dashboard
+# python tools/notion_push_docs.py --only dashboard
 ```
 
 > The Notion integration must be connected to each target page: open the page → `···` → Connections → add your integration.
@@ -198,14 +202,14 @@ pip install notion-client requests
 
 ```bash
 # Preview (no writes):
-source .claude/project.env && python tools/notion_doc_sync.py --dry-run
+source .claude/project.env && python tools/notion_push_docs.py --dry-run
 
 # Push for real:
-source .claude/project.env && python tools/notion_doc_sync.py
+source .claude/project.env && python tools/notion_push_docs.py
 
 # Check the Tasks DB connection and preview a todo push:
-python tools/notion_sync.py --inspect
-python tools/ready_set.py && python tools/notion_sync.py --dry-run
+python tools/notion_push_tasks.py --inspect
+python tools/roadmap_frontier.py && python tools/notion_push_tasks.py --dry-run
 ```
 
 ---
