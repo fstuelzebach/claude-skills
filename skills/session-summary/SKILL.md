@@ -25,7 +25,7 @@ explanation next to it, and ends up in the glossary.
   - `Class` = the class page
   - `Links` = the main repo URL
   - `task_key` = `review:<title>`. This keeps the page out of `session-close`'s Notion intake (which only takes pages with an empty `task_key`), and `notion_push_tasks.py` skips `review:` keys when listing orphans.
-  - icon `🔎`
+  - **No icon.** Never set `icon` on the page (pass nothing, not an emoji). The user doesn't want page icons such as the magnifying glass.
 - **No duplicates:** search Notion for the title first. If the page exists, ask whether to update it or add a suffix (`_2`).
 
 ## 2. Collect the facts (from the session only, never invented)
