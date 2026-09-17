@@ -34,6 +34,7 @@ The two are intertwined: skills define the method, Notion gives it continuity. A
 | `view` | No | Write the last response to a temp file and open it in PyCharm (macOS, Windows, Linux), so you can read and chat side by side |
 | `view-clean` | No | Delete the temp files `view` created |
 | `handoff` | No | Compact the current conversation into a structured handoff doc for the next agent or session |
+| `session-summary` | Yes | Write a Notion review page for the session: every change with why and what it means for you, plain English with the technical terms bolded, GitHub commit/file/raw links for cross-checking in claude.ai, open points in detail, and a glossary |
 | `domain-glossary` | No | Extract a DDD-style domain glossary from the conversation, saved to `DOMAIN_GLOSSARY.md` |
 | `session-close` | Steps 1, 8 & 10 only | End-of-session ritual: clean-tree check → ingest Notion planning input → reconcile ROADMAPs/CHANGELOGs → compute dependency frontier → group it into isolated parallel tracks → ratify → write task packets → regenerate the one-screen status file → push open tasks to Notion → commit + push → mirror docs |
 | `push-tasks` | Yes | Create-only projection of open tasks into the Notion Tasks DB (ready frontier by default, `all` for blocked too); ticks pages of done tasks, never archives, never sets dates |

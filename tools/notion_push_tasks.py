@@ -257,7 +257,9 @@ def main() -> int:
     to_create = [t for gid, t in source.items() if gid not in existing]
     to_tick = [(gid, pg["id"]) for gid, pg in existing.items()
                if gid in done and not pg["checked"]] if PROPERTY_MAP.get("done") else []
-    orphans = [gid for gid in existing if gid not in open_tasks and gid not in done]
+    # `review:` keys belong to session-summary pages, not ROADMAP tasks
+    orphans = [gid for gid in existing
+               if gid not in open_tasks and gid not in done and not gid.startswith("review:")]
 
     print(f"source={'all open' if args.all else 'ready'}({len(source)})  in_notion={len(existing)}  "
           f"create={len(to_create)}  tick={len(to_tick)}  orphans={len(orphans)} (left alone)")
