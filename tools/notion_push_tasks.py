@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
 """
-notion_push_tasks.py  ·  One-way, create-only projection of open tasks into Notion.
+notion_push_tasks.py  ·  Sync between ROADMAP tasks and the Notion Tasks DB (calendar).
+
+RULE (user decision 2026-09-29): a Notion task page exists only when a task has a
+calendar slot. Pages come from two places only — the user creates one with a date
+(it IS the session input; it gets linked, never duplicated), or `plan-next`
+books a slot with the user (`--schedule`). Nothing pushes the open-task list.
 
 WHAT IT DOES
-    Reads docs/roadmap_frontier.json and projects open tasks into a Notion Tasks DB
-    (used by the `push-tasks` skill):
-      · creates a page for each open task that has no page yet
-        (default: the ready frontier; --all: every unchecked task, incl. blocked),
-      · ticks the checkbox on pages whose task is now [x] in a ROADMAP.
-    It NEVER archives or deletes pages and never touches Datum — scheduling is done
-    by hand in Notion, and a page must not vanish because its task became blocked.
-    It never writes to ROADMAPs itself. Two things flow back from Notion, and the
-    session-close ritual turns them into ROADMAP / CHANGELOG edits by hand:
+    (default)  sync: ticks the checkbox on pages whose task is now [x] in a ROADMAP.
+    --schedule GID START [END]   book a calendar slot: set Datum on the task's page,
+               creating the page if the task has none (plan-next only).
+    --agenda [DAYS]              this project's dated, unticked pages from today
+               for DAYS days (default 1 = today): the session goal / booked slots.
+    It NEVER archives or deletes pages and never writes to ROADMAPs itself.
+    Two things flow back from Notion, and the session-close ritual turns them
+    into ROADMAP / CHANGELOG edits by hand:
       · `--checked` — pages ticked in Notion whose task is still open;
       · `--inbox`   — planning input: pages of this project's Class that have no
         task_key yet (tasks and notes you created in Notion). Once session-close
@@ -30,9 +34,11 @@ SETUP
 
 USAGE
     python tools/notion_push_tasks.py --inspect          # print DB schema (connection test)
-    python tools/notion_push_tasks.py --dry-run          # show what would change
-    python tools/notion_push_tasks.py                    # push the ready frontier
-    python tools/notion_push_tasks.py --all [--dry-run]  # push every unchecked task
+    python tools/notion_push_tasks.py --dry-run          # show which pages would be ticked
+    python tools/notion_push_tasks.py                    # tick pages of done tasks
+    python tools/notion_push_tasks.py --agenda           # today's dated tasks (session goal)
+    python tools/notion_push_tasks.py --agenda 7         # booked slots for the next 7 days
+    python tools/notion_push_tasks.py --schedule oc_dashboard.T141 2026-10-01T14:00 2026-10-01T16:00
     python tools/notion_push_tasks.py --checked          # list open tasks ticked in Notion
     python tools/notion_push_tasks.py --inbox --since 2026-09-15  # Notion-born items not yet in git
     python tools/notion_push_tasks.py --link <page> <gid>  # mark an inbox page as ingested
@@ -65,7 +71,9 @@ PROPERTY_MAP = {
     "notes":    "Notes",             # rich_text: full title + needs/waiting_on
     "class":    "Class",             # relation → project class page
     "done":     "Kontrollkästchen",  # checkbox: ticked when the task is [x]
+    "date":     "Datum",             # date (optionally with a time range): the calendar slot
 }
+TZ = "Europe/Berlin"
 # ------------------------------------------------------------------------------
 
 
@@ -174,6 +182,67 @@ def link_page(page_id: str, gid: str) -> None:
     print(f"linked {page_id} -> {gid}")
 
 
+def _datum(start: str, end: str | None) -> dict:
+    """Naive ISO datetimes are Berlin local time (Notion applies time_zone)."""
+    d = {"start": start, "end": end}
+    if "T" in start:
+        d["time_zone"] = TZ
+    return {"date": d}
+
+
+def schedule(gid: str, start: str, end: str | None, open_tasks: dict[str, dict], dry: bool) -> None:
+    if gid not in open_tasks:
+        sys.exit(f"{gid} is not an open task in any ROADMAP — nothing to schedule")
+    existing = query_existing()
+    slot = start + (f" -> {end}" if end else "")
+    if dry:
+        print(f"would {'update' if gid in existing else 'create'} {gid} at {slot}")
+        return
+    if gid in existing:
+        r = requests.patch(f"{API}/pages/{existing[gid]['id']}", headers=headers(), timeout=30,
+                           json={"properties": {PROPERTY_MAP["date"]: _datum(start, end)}})
+    else:
+        props = task_properties(open_tasks[gid])
+        props[PROPERTY_MAP["date"]] = _datum(start, end)
+        r = requests.post(f"{API}/pages", headers=headers(), timeout=30,
+                          json={"parent": {"database_id": db_id()}, "properties": props})
+    if r.status_code != 200:
+        sys.exit(f"schedule failed [{r.status_code}]: {r.text[:300]}")
+    print(f"scheduled {gid} at {slot}: {r.json().get('url', '')}")
+
+
+def agenda(days: int) -> None:
+    from datetime import date, timedelta
+    first, last = date.today(), date.today() + timedelta(days=days - 1)
+    payload = {"page_size": 100,
+               "sorts": [{"property": PROPERTY_MAP["date"], "direction": "ascending"}],
+               "filter": {"and": [
+                   {"property": PROPERTY_MAP["class"], "relation": {"contains": class_id()}},
+                   {"property": PROPERTY_MAP["date"], "date": {"on_or_after": first.isoformat()}},
+                   {"property": PROPERTY_MAP["date"], "date": {"on_or_before": last.isoformat()}},
+                   {"property": PROPERTY_MAP["done"], "checkbox": {"equals": False}},
+               ]}}
+    r = requests.post(f"{API}/databases/{db_id()}/query", headers=headers(), json=payload, timeout=30)
+    if r.status_code != 200:
+        sys.exit(f"agenda query failed [{r.status_code}]: {r.text[:300]}")
+    pages = r.json()["results"]
+    span = str(first) if days == 1 else f"{first} .. {last}"
+    print(f"{len(pages)} dated task(s) {span}:")
+    for page in pages:
+        pr = page["properties"]
+        d = pr[PROPERTY_MAP["date"]]["date"]
+        when = d["start"].replace("T", " ")[:16]
+        if d.get("end") and "T" in d["end"]:
+            when += " - " + d["end"][11:16]
+        key = "".join(t["plain_text"] for t in pr[PROPERTY_MAP["task_key"]]["rich_text"])
+        key = key or "(unlinked: ingest, then --link)"
+        title = "".join(t["plain_text"] for t in pr[PROPERTY_MAP["title"]]["title"])
+        notes = "".join(t["plain_text"] for t in pr.get(PROPERTY_MAP["notes"], {}).get("rich_text", []))
+        print(f"  {when:22} {key:30} {title[:70]}  (page {page['id']})")
+        if notes:
+            print(f"        notes: {notes[:200]}")
+
+
 def _text(s: str, limit: int = RICH_TEXT_MAX) -> list[dict]:
     return [{"text": {"content": s[:limit]}}]
 
@@ -206,10 +275,13 @@ def task_properties(task: dict) -> dict:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Project open tasks into Notion (create-only).")
+    ap = argparse.ArgumentParser(description="Sync ROADMAP tasks with the Notion Tasks DB (calendar).")
     ap.add_argument("--inspect", action="store_true", help="print DB schema and exit")
     ap.add_argument("--dry-run", action="store_true", help="show changes, make none")
-    ap.add_argument("--all", action="store_true", help="push blocked tasks too, not just the frontier")
+    ap.add_argument("--agenda", nargs="?", type=int, const=1, metavar="DAYS",
+                    help="list this project's dated, unticked pages for DAYS days from today (default 1)")
+    ap.add_argument("--schedule", nargs="+", metavar="GID_START_END",
+                    help="GID START [END] (ISO, Berlin time): book a calendar slot for an open task")
     ap.add_argument("--checked", action="store_true",
                     help="list open tasks ticked in Notion (for session-close reconcile) and exit")
     ap.add_argument("--inbox", action="store_true",
@@ -229,6 +301,9 @@ def main() -> int:
     if args.link:
         link_page(*args.link)
         return 0
+    if args.agenda:
+        agenda(args.agenda)
+        return 0
     if args.inbox:
         items = query_inbox(args.since)
         print(f"{len(items)} Notion inbox item(s) not yet in git:")
@@ -242,8 +317,13 @@ def main() -> int:
     data = json.loads(Path(args.ready).read_text(encoding="utf-8"))
     if "done" not in data:
         sys.exit(f"{args.ready} has no 'done' list — update tools/roadmap_frontier.py and re-run it")
-    open_tasks = {t["gid"]: t for t in data["ready"] + data["blocked"]}
-    source = open_tasks if args.all else {t["gid"]: t for t in data["ready"]}
+    open_tasks = {t["gid"]: t for t in data["ready"] + data["blocked"] + data.get("held", [])}
+    if args.schedule:
+        if len(args.schedule) not in (2, 3):
+            sys.exit("--schedule GID START [END]")
+        end = args.schedule[2] if len(args.schedule) == 3 else None
+        schedule(args.schedule[0], args.schedule[1], end, open_tasks, args.dry_run)
+        return 0
     done = set(data["done"])
     existing = query_existing()
 
@@ -254,30 +334,20 @@ def main() -> int:
             print(f"  ✓ {g}  {open_tasks[g]['title'][:90]}")
         return 0
 
-    to_create = [t for gid, t in source.items() if gid not in existing]
     to_tick = [(gid, pg["id"]) for gid, pg in existing.items()
                if gid in done and not pg["checked"]] if PROPERTY_MAP.get("done") else []
     # `review:` keys belong to session-summary pages, not ROADMAP tasks
     orphans = [gid for gid in existing
                if gid not in open_tasks and gid not in done and not gid.startswith("review:")]
 
-    print(f"source={'all open' if args.all else 'ready'}({len(source)})  in_notion={len(existing)}  "
-          f"create={len(to_create)}  tick={len(to_tick)}  orphans={len(orphans)} (left alone)")
+    print(f"in_notion={len(existing)}  tick={len(to_tick)}  orphans={len(orphans)} (left alone)")
 
     if args.dry_run:
-        for t in to_create:
-            print(f"  + create {page_title(t)}")
         for gid, _ in to_tick:
             print(f"  ✓ tick   {gid}")
         for gid in orphans:
             print(f"  ? orphan {gid} (not in any ROADMAP — untouched)")
         return 0
-
-    for t in to_create:
-        r = requests.post(f"{API}/pages", headers=headers(), timeout=30, json={
-            "parent": {"database_id": db_id()},
-            "properties": task_properties(t)})
-        print(f"  + {t['gid']}: {'ok' if r.status_code == 200 else r.text[:200]}")
 
     for gid, pid in to_tick:
         r = requests.patch(f"{API}/pages/{pid}", headers=headers(), timeout=30,

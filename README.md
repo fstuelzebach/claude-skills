@@ -36,8 +36,9 @@ The two are intertwined: skills define the method, Notion gives it continuity. A
 | `handoff` | No | Compact the current conversation into a structured handoff doc for the next agent or session |
 | `session-summary` | Yes | Write a Notion review page for the session: every change with why and what it means for you, plain English with the technical terms bolded, GitHub commit/file/raw links for cross-checking in claude.ai, open points in detail, and a glossary |
 | `domain-glossary` | No | Extract a DDD-style domain glossary from the conversation, saved to `DOMAIN_GLOSSARY.md` |
-| `session-close` | Steps 1, 8 & 10 only | End-of-session ritual: clean-tree check → ingest Notion planning input → reconcile ROADMAPs/CHANGELOGs → compute dependency frontier → group it into isolated parallel tracks → ratify → write task packets → regenerate the one-screen status file → push open tasks to Notion → commit + push → mirror docs |
-| `push-tasks` | Yes | Create-only projection of open tasks into the Notion Tasks DB (ready frontier by default, `all` for blocked too); ticks pages of done tasks, never archives, never sets dates |
+| `session-close` | Steps 1, 5 & 7 only | End-of-session bookkeeping, no planning questions: clean-tree check → ingest Notion input → reconcile ROADMAPs/CHANGELOGs → check the task graph by code → regenerate the one-screen status file (incl. booked calendar slots) → tick done tasks in Notion → commit + push → mirror docs |
+| `plan-next` | Yes (booking) | Only when the user asks: recommend 2–3 ready tasks, the user picks tasks + time slots, Claude books them in the Notion calendar (the only place task pages are created); optional parallel tracks + task packets |
+| `push-tasks` | Yes | Ticks Notion pages of done tasks and reads the calendar (`--agenda`: today's dated tasks = the session goal). Never creates pages for open tasks — pages exist only for calendar slots |
 | `push-docs` | Yes | Push canonical project docs (ROADMAPs, dashboard, CLAUDE.md, …) to Notion as a generated, read-only mirror |
 
 ---
@@ -46,11 +47,11 @@ The two are intertwined: skills define the method, Notion gives it continuity. A
 
 I use a single Notion workspace as a second brain across all projects. Each project gets its own domain within it — its own mirror pages, its own entry in the Progress Tasks database — but the workspace, token, and database are shared globally.
 
-This design choice is hardwired. It's not a plugin or an optional add-on; it's the memory architecture the `session-close` ritual is built around. The mirror keeps Notion current so it can be read on mobile, in Claude.ai, or anywhere outside the IDE. The Tasks database holds the open tasks (pushed by `push-tasks`); scheduling happens there, by hand.
+This design choice is hardwired. It's not a plugin or an optional add-on; it's the memory architecture the `session-close` ritual is built around. The mirror keeps Notion current so it can be read on mobile, in Claude.ai, or anywhere outside the IDE. The Tasks database is the calendar: a task page exists only when a task has a slot — created by the user, or booked with the user via `plan-next`.
 
-**Two golden sources.** Git holds execution truth — `ROADMAP.md` (open work), `CHANGELOG.md` (finished work), code. Notion holds planning and thinking, because it is reachable from anywhere. `session-close` keeps them in step in both directions: planning input created in Notion is ingested into ROADMAP/CHANGELOG at Step 1 (`notion_push_tasks.py --inbox`), and open tasks plus mirrored docs go back out at Steps 8 and 10.
+**Two golden sources.** Git holds execution truth — `ROADMAP.md` (open work), `CHANGELOG.md` (finished work), code. Notion holds planning and thinking, because it is reachable from anywhere. `session-close` keeps them in step in both directions: planning input created in Notion is ingested into ROADMAP/CHANGELOG at Step 1 (`notion_push_tasks.py --inbox`), and done-ticks plus mirrored docs go back out at Steps 5 and 7. What to do next and when is planned only on request (`plan-next`).
 
-**Skills without Notion still work.** The general-purpose skills have no Notion dependency at all. `session-close` degrades gracefully — reconciliation, frontier computation, track grouping, packets, the status file and the commit are pure git + markdown. Only Steps 1, 8 and 10 need the integration.
+**Skills without Notion still work.** The general-purpose skills have no Notion dependency at all. `session-close` degrades gracefully — reconciliation, frontier check, the status file and the commit are pure git + markdown. Only Steps 1, 5 and 7 need the integration.
 
 ---
 
@@ -87,7 +88,7 @@ These are standalone Python scripts that the skills call. They are copied into t
 | `roadmap_frontier.py` | No | Traverses `needs:`/`blocks:` dependency edges across all `ROADMAP.md` files → writes `docs/roadmap_frontier.json` with ready/blocked/done/rollup. `--check` validates structure only (used by the commit guard). Reads sibling `CHANGELOG.md` files as done; `` `hold:reason` `` parks a task outside the frontier. Standard library only. |
 | `archive_done_tasks.py` | No | Moves finished task blocks from each `ROADMAP.md` into the sibling `CHANGELOG.md` (dry-run by default, `--apply` to move). Keeps ROADMAPs to open work. Standard library only. |
 | `notion_push_docs.py` | Yes | Wipes and rewrites Notion pages from local markdown (idempotent). Reads doc→page mapping from `conf/notion_mirror.toml`. Auth via `NOTION_TOKEN` env var. |
-| `notion_push_tasks.py` | Yes | Create-only projection of open tasks into the Notion Tasks DB (used by `push-tasks`): creates missing pages, ticks pages of done tasks, never archives. `--all` includes blocked tasks; `--checked` lists open tasks ticked in Notion; `--inbox --since DATE` lists Notion-born planning input and `--link` marks it ingested. Reads `.claude/project.env` itself. |
+| `notion_push_tasks.py` | Yes | Notion Tasks DB sync: default ticks pages of done tasks (creates nothing); `--agenda [DAYS]` lists dated tasks (session goal / booked slots); `--schedule GID START [END]` books a calendar slot (plan-next); `--checked` lists open tasks ticked in Notion; `--inbox --since DATE` lists Notion-born input and `--link` marks it ingested. Never archives. Reads `.claude/project.env` itself. |
 
 ---
 

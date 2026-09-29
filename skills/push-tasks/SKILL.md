@@ -1,56 +1,42 @@
 ---
 name: push-tasks
-description: Project the project's open ROADMAP tasks into the Notion Tasks database as pages (create-only), so they can be scheduled by hand in Notion. Default pushes the ready frontier; "push-tasks all" pushes every unchecked task including blocked ones. Use as Step 8 of session-close, or when the user says "push tasks", "push todos", "push tasks to notion", or "sync tasks".
+description: Sync ROADMAP completion into the Notion Tasks DB — tick the pages of tasks that are now done — and read the calendar (agenda). It never creates pages for open tasks; pages exist only for calendar slots (created by the user, or booked via plan-next). Use as Step 5 of session-close, or when the user says "push tasks", "sync tasks", "sync notion tasks", or asks what is booked / what today's session is for.
 ---
 
-# Push open tasks to Notion
+# Notion task sync
 
-A one-way, **create-only** projection of open tasks into the Notion Tasks DB.
-ROADMAPs are the truth; Notion is where the user decides *when* to do things.
+**Rule (user decision 2026-09-29):** a Notion task page exists only when a task
+has a calendar slot. Pages come from exactly two places:
+- the **user** creates one with a date — it is the input for that session and is
+  linked to a ROADMAP task (`--link`), never duplicated;
+- **`plan-next`** books a slot with the user (`--schedule`).
+Nothing projects the open-task list into Notion.
 
 **Before starting:** read `## Claude Skills Config` in `CLAUDE.md` to resolve
-`{tasks_push_script}` (default `python tools/notion_push_tasks.py`) and `{frontier_output}`
-(default `docs/roadmap_frontier.json`). The script reads `.claude/project.env`
-(`NOTION_CLASS_PAGE_ID`) itself; `NOTION_TOKEN` and `NOTION_TASKS_DB_ID` come from
-the global environment.
+`{tasks_push_script}` (default `python tools/notion_push_tasks.py`) and
+`{frontier_output}` (default `docs/roadmap_frontier.json`). `NOTION_TOKEN` and
+`NOTION_TASKS_DB_ID` come from the global environment, `NOTION_CLASS_PAGE_ID` from
+`.claude/project.env`.
 
-## What a pushed page looks like
-- **title** `{task-id} — {title}` (long titles truncated; the full title is in Notes)
-- **task_key** the global task id — the only matching key
-- **Class** → the project's class page
-- **Notes** full title, `needs:`, and `waiting on:` for blocked tasks
-- **Kontrollkästchen** unchecked
-- **Datum** left empty — scheduling is done by hand in Notion
+## Sync (Step 5 of session-close)
+1. Make sure `{frontier_output}` is fresh (run the frontier script if needed).
+2. `{tasks_push_script} --dry-run` → one summary line (tick / orphans).
+3. `{tasks_push_script}` → ticks pages whose task is now `[x]`.
+4. Report one line: ticked N, orphans K (left alone — pages whose task id is in no
+   ROADMAP; mention them so the user can tidy up by hand).
 
-## Procedure
-1. Make sure `{frontier_output}` is fresh — run the frontier script first if this
-   is not already Step 8 of `session-close`.
-2. **Preview:**
-   ```bash
-   {tasks_push_script} --dry-run            # ready frontier
-   {tasks_push_script} --dry-run --all      # when invoked as "push-tasks all"
-   ```
-   Show the user the summary line (create / tick / orphans).
-3. **Push** with the same arguments minus `--dry-run`. No extra confirmation is
-   needed inside `session-close`; when invoked on its own and more than ~15 pages
-   would be created, confirm first.
-4. **Report** one line: created N, ticked M, orphans K (left alone).
+## Agenda (session goal)
+- `{tasks_push_script} --agenda` — this project's dated, unticked pages for today.
+  At the start of a session, these are the session's goal: read each page (it may
+  hold notes or a list). An unlinked page is ingested like `session-close` Step 1
+  (propose task / note → confirm → `--link`).
+- `{tasks_push_script} --agenda 14` — booked slots for the next 14 days.
 
 ## What it never does
-- Never archives or deletes pages — a task that became blocked keeps its page and
-  any date the user set.
-- Never writes dates, and never writes to ROADMAPs.
-- Orphans (pages whose task id is in no ROADMAP) are listed, not touched. Mention
-  them so the user can tidy up by hand.
-
-## The return path
-Notion is a golden source for planning, so two things flow back — both handled
-by `session-close` Step 1, never by this skill:
-- `{tasks_push_script} --checked` — open tasks ticked in Notion (a completion
-  signal; confirmed with the user, then flipped to `[x]` in the ROADMAP).
-- `{tasks_push_script} --inbox --since DATE` — pages created or edited in Notion
-  that are not linked to a task yet; each becomes a ROADMAP task or CHANGELOG
-  entry, then `--link PAGE_ID GID` marks it ingested.
+- Never creates pages for open tasks (only `plan-next` books slots).
+- Never archives or deletes pages; never changes a date the user set.
+- Never writes to ROADMAPs — completion signals (`--checked`) and Notion-born
+  pages (`--inbox`) are turned into ROADMAP edits by `session-close` Step 1.
 
 If `NOTION_TOKEN` / `NOTION_TASKS_DB_ID` / `NOTION_CLASS_PAGE_ID` is missing, STOP
 and point the user to setup — never invent an id.
