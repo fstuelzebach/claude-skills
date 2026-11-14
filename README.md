@@ -30,6 +30,7 @@ The two are intertwined: skills define the method, Notion gives it continuity. A
 | `caveman` | No | Ultra-compressed communication mode (~75% fewer tokens, zero loss of precision) |
 | `grill-me` | No | Dependency-aware interview in rounds of 2–4 questions (with recommendations) to stress-test a plan or design before committing; `quick` for one-at-a-time |
 | `improve-prompt` | No | Diagnose a prompt against ten axes (scope, test data, permissions, evidence standard, output contract, candour, …) and return a paste-ready rewrite |
+| `architecture-review` | No | Objective, evidence-based review of architecture and workflows (data flow, data copies, memory/disk hot spots, inconsistencies), in plain language; on request a phased change plan with data roles (persistent / cache / derived), an approval gate and a backup gate. Saves dated reports with measured baselines so repeat reviews track progress |
 | `deepen-modules` | No | Deepen a cluster of shallow modules safely — classify dependencies, choose seams/adapters, replace rather than layer tests |
 | `view` | No | Write the last response to a temp file and open it in PyCharm (macOS, Windows, Linux), so you can read and chat side by side |
 | `view-clean` | No | Delete the temp files `view` created |
